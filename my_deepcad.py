@@ -10,20 +10,32 @@ class GNNLayer(nn.Module):
         self.linear = nn.Linear(in_dim, out_dim)
         self.attention = nn.Linear(out_dim * 2, 1)
         
-    def forward(self, x, adj):
-        # Message passing
-        h = self.linear(x)
-        
-        # Attention mechanism
-        attention_input = torch.cat([h.unsqueeze(1).expand(-1, h.size(1), -1),
-                                  h.unsqueeze(2).expand(-1, -1, h.size(1), -1)], dim=-1)
-        attention_weights = torch.sigmoid(self.attention(attention_input)).squeeze(-1)
-        attention_weights = attention_weights * adj
-        
-        # Aggregate messages
-        h = torch.bmm(attention_weights, h)
-        
-        return h
+    def forward(self, x, adj, mask=None):
+        # x: [B, N, F], adj: [B, N, N], mask: [B, N] or None
+        h = self.linear(x)  # [B, N, out_dim]
+        B, N, D = h.shape
+        # Prepare for attention: pairwise concat
+        h_i = h.unsqueeze(2).expand(B, N, N, D)  # [B, N, N, D]
+        h_j = h.unsqueeze(1).expand(B, N, N, D)  # [B, N, N, D]
+        att_input = torch.cat([h_i, h_j], dim=-1)  # [B, N, N, 2D]
+        att_score = torch.sigmoid(self.attention(att_input)).squeeze(-1)  # [B, N, N]
+        # Mask out non-edges
+        att_score = att_score * adj
+        # Mask out padded nodes (if mask provided)
+        if mask is not None:
+            # mask: [B, N], need to mask both sender and receiver
+            mask_i = mask.unsqueeze(2)  # [B, N, 1]
+            mask_j = mask.unsqueeze(1)  # [B, 1, N]
+            att_score = att_score * mask_i * mask_j
+        # Normalize attention weights
+        att_sum = att_score.sum(dim=-1, keepdim=True) + 1e-8
+        att_weights = att_score / att_sum  # [B, N, N]
+        # Aggregate
+        h_new = torch.bmm(att_weights, h)  # [B, N, D]
+        # Zero out padded nodes
+        if mask is not None:
+            h_new = h_new * mask.unsqueeze(-1)
+        return h_new
 
 class DeepCAD(nn.Module):
     def __init__(self, node_dim, hidden_dim, num_ops, num_params):
@@ -39,27 +51,31 @@ class DeepCAD(nn.Module):
             input_size=hidden_dim,
             hidden_size=hidden_dim,
             num_layers=2,
-            batch_first=True
+            batch_first=True,
+            bidirectional=True
         )
         
         # Operation type prediction
         self.op_predictor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim * 2, hidden_dim),  # *2 for bidirectional
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(hidden_dim, num_ops)
         )
         
         # Parameter prediction
         self.param_predictor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(hidden_dim, num_params)
         )
         
         # Sketch prediction
         self.sketch_predictor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(hidden_dim, 128)  # 128-dimensional sketch representation
         )
         
@@ -67,30 +83,50 @@ class DeepCAD(nn.Module):
         self.node_predictor = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(hidden_dim, node_dim)
         )
     
     def forward(self, batch):
         # Extract inputs
-        node_features = batch['node_features']
-        adjacency = batch['adjacency']
-        mask = batch['mask']
+        node_features = batch['node_features']  # [B, N, F]
+        adjacency = batch['adjacency']  # [B, N, N]
+        mask = batch['mask']  # [B, N]
         
         # GNN processing
-        h = self.gnn1(node_features, adjacency)
+        h = self.gnn1(node_features, adjacency, mask)
         h = F.relu(h)
-        h = self.gnn2(h, adjacency)
+        h = self.gnn2(h, adjacency, mask)
         h = F.relu(h)
-        h = self.gnn3(h, adjacency)
+        h = self.gnn3(h, adjacency, mask)
+        
+        # Pack sequence for LSTM
+        lengths = mask.sum(dim=1).cpu().int()
+        packed_h = nn.utils.rnn.pack_padded_sequence(
+            h, lengths, batch_first=True, enforce_sorted=False
+        )
         
         # LSTM processing
-        lstm_out, _ = self.lstm(h)
+        packed_out, _ = self.lstm(packed_h)
+        lstm_out, _ = nn.utils.rnn.pad_packed_sequence(packed_out, batch_first=True)
+        
+        # Ensure lstm_out has the same sequence length as op_types
+        B, T, _ = batch['op_types'].shape
+        if lstm_out.size(1) != T:
+            # Pad or truncate lstm_out to match op_types length
+            if lstm_out.size(1) < T:
+                # Pad with zeros
+                padding = torch.zeros(B, T - lstm_out.size(1), lstm_out.size(2), device=lstm_out.device)
+                lstm_out = torch.cat([lstm_out, padding], dim=1)
+            else:
+                # Truncate
+                lstm_out = lstm_out[:, :T, :]
         
         # Predictions
-        op_pred = self.op_predictor(lstm_out)
-        param_pred = self.param_predictor(lstm_out)
-        sketch_pred = self.sketch_predictor(lstm_out)
-        node_pred = self.node_predictor(h)
+        op_pred = self.op_predictor(lstm_out)  # [B, T, num_ops]
+        param_pred = self.param_predictor(lstm_out)  # [B, T, num_params]
+        sketch_pred = self.sketch_predictor(lstm_out)  # [B, T, 128]
+        node_pred = self.node_predictor(h)  # [B, N, node_dim]
         
         return {
             'op_pred': op_pred,

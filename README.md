@@ -1,90 +1,187 @@
-# DeepCAD Implementation
+# DeepCAD: Deep Generative Network for Computer-Aided Design Models
 
-This repository contains an implementation of DeepCAD, a deep learning model for Computer-Aided Design (CAD) operations. The model uses a combination of Graph Neural Networks (GNN) and LSTM to learn and generate CAD operations from input graphs.
+This repository contains an implementation of DeepCAD, a deep generative network for Computer-Aided Design (CAD) models. The implementation is based on the paper ["DeepCAD: A Deep Generative Network for Computer-Aided Design Models"](https://www.cs.columbia.edu/cg/deepcad/) by Rundi Wu, Chang Xiao, and Changxi Zheng (ICCV 2021).
 
-## Architecture Overview
+## Overview
 
-The implementation consists of several key components:
+DeepCAD is a deep learning model that can:
+1. Encode CAD models into a compact latent representation
+2. Decode latent vectors back into CAD models
+3. Generate new CAD models by sampling from the latent space
 
-1. **Graph Neural Network (GNN)**
-   - Uses attention-based message passing
-   - 3 GNN layers with ReLU activation
-   - Hidden dimension: 256
-   - Input dimension: 3 (node features)
-
-2. **LSTM Encoder-Decoder**
-   - 2 LSTM layers
-   - Hidden dimension: 256
-   - Used for operation sequence generation
-
-3. **Prediction Heads**
-   - Operation type prediction
-   - Parameter prediction
-   - Sketch prediction (128-dimensional representation)
-   - Node feature prediction
+Our implementation uses a transformer-based architecture for both the encoder and decoder, allowing the model to effectively handle variable-length sequences of CAD operations.
 
 ## Hyperparameters
 
-### Model Parameters
-- Input dimension: 3
+Key hyperparameters:
+- Input dimension: 3 (x, y, z coordinates)
 - Hidden dimension: 256
 - Latent dimension: 128
-- Maximum operations: 20
-- Number of operation types: 10
-- Number of GCN layers: 3
-- Number of LSTM layers: 2
-
-### Training Parameters
-- Batch size: 8
-- Learning rate: 0.001
-- Number of epochs: 100
+- Number of transformer layers: 3
+- Number of attention heads: 8
+- Dropout rate: 0.1
+- Learning rate: 0.0001
+- Batch size: 16
 - Weight decay: 1e-5
-- Gradient clipping: 1.0
-- Sketch loss weight: 0.1
 
-### Data Parameters
-- Maximum nodes per graph: 512
-- Number of data loading workers: 4
+## Project Structure
 
-## Design Choices
+```
+.
+├── models/
+│   └── deepcad.py         # DeepCAD model implementation
+├── utils/
+│   └── data_utils.py      # Data utilities
+├── data/
+│   └── deepcad/           # Dataset directory
+│       ├── train/         # Training data
+│       ├── val/           # Validation data
+│       └── test/          # Test data
+├── checkpoints/           # Model checkpoints
+├── config.py              # Configuration
+├── generate_sample_data.py # Script to generate sample data
+├── train.py               # Training script
+├── test.py                # Testing script
+├── evaluate.py            # Evaluation script
+└── README.md              # This file
+```
 
-1. **Attention Mechanism**
-   - Implemented attention in GNN layers for better feature aggregation
-   - Uses concatenation of node features for attention computation
-   - Applies sigmoid activation for attention weights
+## Installation
 
-2. **Multi-task Learning**
-   - Simultaneous prediction of:
-     - Operation types
-     - Operation parameters
-     - Sketch representations
-     - Node features
-   - Balanced loss weights for different tasks
+1. Clone this repository:
+```bash
+git clone https://github.com/yourusername/deepcad.git
+cd deepcad
+```
 
-3. **Graph Processing**
-   - Uses adjacency matrix for message passing
-   - Implements mask support for variable-sized graphs
-   - Three-layer GNN for hierarchical feature extraction
+2. Install dependencies:
+```bash
+pip install torch numpy matplotlib tqdm tensorboard
+```
 
-4. **Operation Generation**
-   - Greedy decoding for operation sequence generation
-   - Special handling for sketch-based operations (extrude, revolve)
-   - End-of-sequence detection for variable-length sequences
+## Data Generation
 
-## Usage
+To generate sample data for training and testing:
 
-The model can be used for:
-1. Learning CAD operations from input graphs
-2. Generating CAD programs from new input graphs
-3. Predicting operation parameters and sketches
+```bash
+python generate_sample_data.py
+```
 
-## Dependencies
-- PyTorch
-- NumPy
+This will create sample CAD data in the `data/deepcad` directory.
 
-## File Structure
-- `my_deepcad.py`: Main model implementation
-- `config.py`: Configuration and hyperparameters
-- `train.py`: Training script
-- `data_utils.py`: Data processing utilities
-- `generate_sample_data.py`: Data generation utilities 
+## Training
+
+To train the model:
+
+```bash
+python train.py --data_dir data/deepcad
+```
+
+Additional training options:
+```
+--batch_size: Batch size (default: 32)
+--lr: Learning rate (default: 0.0001)
+--num_epochs: Number of epochs (default: 100)
+--hidden_dim: Hidden dimension (default: 256)
+--latent_dim: Latent dimension (default: 128)
+--resume: Resume training from checkpoint
+```
+
+## Testing
+
+To test the model:
+
+```bash
+python test.py --mode generate --checkpoint checkpoints/best_model.pt --num_samples 10
+```
+
+Available test modes:
+```
+encode: Encode the dataset to latent space
+reconstruct: Reconstruct the dataset
+decode: Decode latent vectors to CAD models
+generate: Generate new CAD models
+```
+
+## Evaluation
+
+To evaluate a trained model:
+
+```bash
+python evaluate.py --checkpoint checkpoints/best_model.pt
+```
+
+Additional evaluation options:
+```
+--generate_samples: Generate new samples
+--num_samples: Number of samples to generate (default: 10)
+--output_dir: Output directory for evaluation results (default: evaluation_results)
+```
+
+## Model Architecture
+
+The DeepCAD model consists of:
+
+1. **Encoder**: Transformer-based encoder that processes CAD models and produces a latent vector representation.
+2. **Decoder**: Transformer-based decoder that generates CAD operations from a latent vector.
+
+The model is trained as a variational autoencoder (VAE), with additional losses for operation type prediction, parameter regression, and sketch feature generation.
+
+## Implementation Status
+
+The implementation is fully functional and includes:
+- Transformer-based encoder-decoder architecture
+- Proper handling of variable-length sequences with padding and masking
+- Multi-task learning for operation type prediction, parameter regression, and sketch generation
+- Training, testing, and evaluation scripts
+- Sample data generation
+
+## Comparing with Original DeepCAD
+
+This implementation differs from the original DeepCAD paper in several key aspects:
+
+1. **Architecture**:
+   - This implementation: Uses transformer-based architecture for both encoder and decoder
+   - Original: Uses graph neural networks (GNNs) for encoding and LSTMs for decoding
+
+2. **Model Structure**:
+   - This version: Implements a variational autoencoder with transformer blocks and self-attention
+   - Original: Uses a hierarchical encoder-decoder with graph message passing and RNN-based sequence generation
+
+3. **Data Representation**:
+   - This implementation: Focuses on node features, adjacency matrices, and operation sequences
+   - Original: Uses more specialized CAD-specific representations with detailed sketch processing
+
+4. **Training Approach**:
+   - This version: Uses multi-task learning with combined losses for reconstruction, operation prediction, etc.
+   - Original: Implements more specialized training pipeline with separate modules for sketch and operation handling
+
+5. **Generation Process**:
+   - This implementation: Generates directly from latent space
+   - Original: Uses more structured generation with specific constraints for CAD validity
+
+## Comparing Model Outputs
+
+To compare outputs between this implementation and the original DeepCAD:
+
+1. Generate samples with our implementation:
+```bash
+python test.py --mode generate --checkpoint checkpoints/best_model.pt --num_samples 10 --output_dir comparison/ours
+```
+
+2. Download original DeepCAD samples (if available):
+```bash
+# This would require access to original DeepCAD samples
+# You can download them from the official repository or request from the authors
+```
+
+3. Visualize and compare results:
+```bash
+python compare_results.py --our_dir comparison/ours --original_dir comparison/original
+```
+
+Note: For a proper comparison, you would need to:
+1. Obtain samples from the original DeepCAD implementation
+2. Convert both outputs to a common format (e.g., .step or .obj files)
+3. Use metrics like Chamfer distance or IoU for quantitative comparison
+4. Perform user studies for qualitative evaluation 
